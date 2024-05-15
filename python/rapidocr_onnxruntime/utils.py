@@ -51,6 +51,7 @@ class OrtInferSession:
         self._verify_model(model_path)
 
         self.cfg_use_cuda = config.get("use_cuda", None)
+        self.cfg_use_dml = config.get("use_dml", None)
         EP_list = self._get_ep_list()
 
         self.session = InferenceSession(
@@ -77,22 +78,22 @@ class OrtInferSession:
             "cudnn_conv_algo_search": "EXHAUSTIVE",
             "do_copy_in_default_stream": True,
         }
-        if use_cuda:
-            EP_list.insert(0, (CUDA_EP, cuda_provider_opts))
 
-        use_directml = os.name == "nt" and DIRECTML_EP in had_providers
-        if use_directml:
+        use_directml = os.name == "nt" and DIRECTML_EP in had_providers and self.cfg_use_dml
+
+        # cuda is better than directml in terms of performance on nvidia gpu
+        if use_cuda:
+            print ("CUDA is available for current env, the inference part is automatically shifted to be executed under CUDA EP.\n")
+            EP_list.insert(0, (CUDA_EP, cuda_provider_opts))
+        elif use_directml:
             print("Windows platform detected, try to use DirectML as primary provider")
             directml_options = cuda_provider_opts if use_cuda else cpu_provider_opts
             EP_list.insert(0, (DIRECTML_EP, directml_options))
+            
         return EP_list
 
     def _verify_providers(self) -> None:
         session_providers = self.session.get_providers()
-        if os.name == "nt" and session_providers[0] != DIRECTML_EP:
-            warnings.warn(
-                "DirectML is not available for the current environment, the inference part is automatically shifted to be executed under other EP.\n"
-            )
 
         if self.cfg_use_cuda and CUDA_EP not in session_providers:
             warnings.warn(
@@ -102,6 +103,12 @@ class OrtInferSession:
                 "https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html",
                 RuntimeWarning,
             )
+        elif os.name == "nt" and session_providers[0] != DIRECTML_EP and self.cfg_use_dml:
+            warnings.warn(
+                "DirectML is not available for the current environment, the inference part is automatically shifted to be executed under other EP.\n"
+            )
+
+
 
     def __call__(self, input_content: np.ndarray) -> np.ndarray:
         input_dict = dict(zip(self.get_input_names(), [input_content]))
